@@ -104,6 +104,11 @@ endif()
 message(STATUS "Setting LIBC_NAMESPACE namespace to '${LIBC_NAMESPACE}'")
 add_compile_definitions(LIBC_NAMESPACE=${LIBC_NAMESPACE})
 
+option(TORQ_CSS "Enable build for CSS" OFF)
+if(TORQ_CSS)
+  add_compile_definitions(TORQ_LIBC_TARGET_IS_CSS=1)
+endif()
+
 # Flags to pass down to the compiler while building the libc functions.
 set(LIBC_COMPILE_OPTIONS_DEFAULT "" CACHE STRING "Architecture to tell clang to optimize for (e.g. -march=... or -mcpu=...)")
 
