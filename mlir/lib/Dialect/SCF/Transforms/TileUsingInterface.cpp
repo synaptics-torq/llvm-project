@@ -24,6 +24,7 @@
 #include "mlir/IR/PatternMatch.h"
 #include "mlir/Interfaces/DestinationStyleOpInterface.h"
 #include "mlir/Interfaces/TilingInterface.h"
+#include "mlir/Transforms/RegionUtils.h"
 #include "llvm/ADT/TypeSwitch.h"
 #include "llvm/Support/Debug.h"
 #include <optional>
@@ -1124,6 +1125,20 @@ mlir::scf::tileConsumerAndFuseProducersUsingSCF(
   //    effectively tiles + fuses the operations.
   auto addCandidateSlices = [](Operation *fusedOp,
                                std::deque<tensor::ExtractSliceOp> &candidates) {
+    if (IfOp ifOp = dyn_cast<IfOp>(fusedOp)) {
+      // tensor.pad is tiled into scf.if and the tensor.extract_slice operations
+      // are in the if regions.
+      visitUsedValuesDefinedAbove(ifOp.getThenRegion(), [&](OpOperand *operand) {
+        if (auto sliceOp = dyn_cast<tensor::ExtractSliceOp>(operand->getOwner()))
+          candidates.push_back(sliceOp);
+      });
+      visitUsedValuesDefinedAbove(ifOp.getElseRegion(), [&](OpOperand *operand) {
+        if (auto sliceOp = dyn_cast<tensor::ExtractSliceOp>(operand->getOwner()))
+          candidates.push_back(sliceOp);
+      });
+      return;
+    }
+
     for (Value operand : fusedOp->getOperands())
       if (auto sliceOp = operand.getDefiningOp<tensor::ExtractSliceOp>())
         candidates.push_back(sliceOp);
