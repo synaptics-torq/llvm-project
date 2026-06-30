@@ -439,8 +439,15 @@ static InitSliceInfo getInitSliceInfoForOuterReduction(
   Attribute zero = IntegerAttr::get(IndexType::get(context), 0);
   Attribute one = IntegerAttr::get(IndexType::get(context), 1);
   SmallVector<OpFoldResult> initStrides(initRank, one);
-  for (AffineExpr dimExpr : partialReductionMap.getResults()) {
-    unsigned dim = cast<AffineDimExpr>(dimExpr).getPosition();
+  for (AffineExpr expr : partialReductionMap.getResults()) {
+    if (auto constant = dyn_cast<AffineConstantExpr>(expr)) {
+      initOffsets.push_back(
+          IntegerAttr::get(IndexType::get(context), constant.getValue()));
+      initSizes.push_back(one);
+      continue;
+    }
+
+    unsigned dim = cast<AffineDimExpr>(expr).getPosition();
     if (reductionDims.contains(dim)) {
       initOffsets.push_back(zero);
     } else {
@@ -465,8 +472,16 @@ static InitSliceInfo getInitSliceInfoForOuterParallel(
   Attribute one = IntegerAttr::get(IndexType::get(context), 1);
   SmallVector<OpFoldResult> initStrides(initRank, one);
   SmallVector<OpFoldResult> resultShape;
-  for (AffineExpr dimExpr : partialReductionMap.getResults()) {
-    unsigned dim = cast<AffineDimExpr>(dimExpr).getPosition();
+  for (AffineExpr expr : partialReductionMap.getResults()) {
+    if (auto constant = dyn_cast<AffineConstantExpr>(expr)) {
+      initOffsets.push_back(
+          IntegerAttr::get(IndexType::get(context), constant.getValue()));
+      initSizes.push_back(one);
+      resultShape.push_back(one);
+      continue;
+    }
+
+    unsigned dim = cast<AffineDimExpr>(expr).getPosition();
     if (std::optional<unsigned> dimPos = getPositionIn(reductionDims, dim)) {
       initOffsets.push_back(splitReductionIvs[dimPos.value()]);
       initSizes.push_back(one);
@@ -537,8 +552,13 @@ struct LinalgOpPartialReductionInterface
 
       // Append the new partial result dimensions.
       SmallVector<OpFoldResult> partialResultShape;
-      for (AffineExpr dimExpr : partialMap.getResults()) {
-        auto dim = cast<AffineDimExpr>(dimExpr);
+      for (AffineExpr expr : partialMap.getResults()) {
+        if (isa<AffineConstantExpr>(expr)) {
+          partialResultShape.push_back(b.getIndexAttr(1));
+          continue;
+        }
+
+        auto dim = cast<AffineDimExpr>(expr);
         partialResultShape.push_back(sizes[dim.getPosition()]);
       }
 
@@ -667,7 +687,11 @@ struct LinalgOpPartialReductionInterface
       SmallVector<int64_t> partialReductionDims;
       for (auto [resultNum, dimExpr] :
            llvm::enumerate(partialMap.getResults())) {
-        unsigned dim = cast<AffineDimExpr>(dimExpr).getPosition();
+        auto dimExprAsDim = dyn_cast<AffineDimExpr>(dimExpr);
+        if (!dimExprAsDim)
+          continue;
+
+        unsigned dim = dimExprAsDim.getPosition();
         if (llvm::is_contained(reductionDims, dim)) {
           partialReductionDims.push_back(resultNum);
         }
