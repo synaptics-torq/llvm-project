@@ -713,17 +713,9 @@ LogicalResult TosaValidation::levelCheckRanksAndSizes(Operation *op) {
 
   // Shape Operators
   CHECK_SHAPE_LEN(AddShape);
-  CHECK_SHAPE_LEN(ConcatShape);
   CHECK_SHAPE_LEN(DivCeilShape);
   CHECK_SHAPE_LEN(DivFloorShape);
-  CHECK_SHAPE_LEN(Exp2Shape);
-  CHECK_SHAPE_LEN(Log2CeilShape);
-  CHECK_SHAPE_LEN(Log2FloorShape);
-  CHECK_SHAPE_LEN(MaxShape);
-  CHECK_SHAPE_LEN(MinShape);
-  CHECK_SHAPE_LEN(ModShape);
   CHECK_SHAPE_LEN(MulShape);
-  CHECK_SHAPE_LEN(SliceShape);
   CHECK_SHAPE_LEN(SubShape);
 
 #undef CHECK_RANKS_AND_SIZES
