@@ -30,6 +30,100 @@ namespace mlir {
 namespace tensor {
 namespace {
 
+/// Bufferization of tensor.bitcast. It is a pure view of the source buffer
+/// with a different element type of the same width, so it bufferizes to a
+/// memref.cast (or a no-op when the element type does not change) and never
+/// causes a copy.
+struct BitcastOpInterface
+    : public BufferizableOpInterface::ExternalModel<BitcastOpInterface,
+                                                    tensor::BitcastOp> {
+  bool bufferizesToMemoryRead(Operation *op, OpOperand &opOperand,
+                              const AnalysisState &state) const {
+    return false;
+  }
+
+  bool bufferizesToMemoryWrite(Operation *op, OpOperand &opOperand,
+                               const AnalysisState &state) const {
+    return false;
+  }
+
+  AliasingValueList getAliasingValues(Operation *op, OpOperand &opOperand,
+                                      const AnalysisState &state) const {
+    return {{op->getResult(0), BufferRelation::Equivalent}};
+  }
+
+  FailureOr<BufferLikeType>
+  getBufferType(Operation *op, Value value, const BufferizationOptions &options,
+                const BufferizationState &state,
+                SmallVector<Value> &invocationStack) const {
+    auto bitcastOp = cast<tensor::BitcastOp>(op);
+    auto maybeSrcBufferType =
+        bufferization::detail::asMemRefType(bufferization::getBufferType(
+            bitcastOp.getSource(), options, state, invocationStack));
+    if (failed(maybeSrcBufferType))
+      return failure();
+    Attribute memorySpace = maybeSrcBufferType->getMemorySpace();
+
+    // Unranked bitcast: no layout information can be carried over.
+    if (isa<UnrankedTensorType>(bitcastOp.getType())) {
+      return cast<BufferLikeType>(getMemRefTypeWithFullyDynamicLayout(
+          bitcastOp.getType(), memorySpace));
+    }
+
+    // Ranked bitcast keeps the shape; the layout is unchanged because both
+    // element types have the same width.
+    auto rankedResultType = cast<RankedTensorType>(bitcastOp.getType());
+    return cast<BufferLikeType>(MemRefType::get(
+        rankedResultType.getShape(), rankedResultType.getElementType(),
+        llvm::cast<MemRefType>(*maybeSrcBufferType).getLayout(), memorySpace));
+  }
+
+  LogicalResult bufferize(Operation *op, RewriterBase &rewriter,
+                          const BufferizationOptions &options,
+                          BufferizationState &state) const {
+    auto bitcastOp = cast<tensor::BitcastOp>(op);
+
+    // The bitcast is a view of the source buffer: take the source's actual
+    // buffer type and re-spell it with the bitcast's element type.
+    FailureOr<Value> resultBuffer =
+        getBuffer(rewriter, bitcastOp.getSource(), options, state);
+    if (failed(resultBuffer))
+      return failure();
+
+    auto srcMemRefType = dyn_cast<MemRefType>(resultBuffer->getType());
+    if (!srcMemRefType) {
+      // Unranked source: cannot re-spell, fall back to fully dynamic.
+      auto resultMemRefType =
+          bufferization::getBufferType(bitcastOp.getResult(), options, state);
+      if (failed(resultMemRefType))
+        return failure();
+      if (resultBuffer->getType() == *resultMemRefType) {
+        replaceOpWithBufferizedValues(rewriter, op, *resultBuffer);
+        return success();
+      }
+      replaceOpWithNewBufferizedOp<memref::CastOp>(
+          rewriter, op, *resultMemRefType, *resultBuffer);
+      return success();
+    }
+
+    auto resultElementType = cast<ShapedType>(bitcastOp.getType()).getElementType();
+    MemRefType resultMemRefType =
+        MemRefType::get(srcMemRefType.getShape(), resultElementType,
+                        srcMemRefType.getLayout(), srcMemRefType.getMemorySpace());
+    if (resultBuffer->getType() == resultMemRefType) {
+      // Same element type: the bitcast is a no-op.
+      replaceOpWithBufferizedValues(rewriter, op, *resultBuffer);
+      return success();
+    }
+
+    // Replace the op with a memref.cast (free re-interpretation of the view).
+    replaceOpWithNewBufferizedOp<memref::CastOp>(rewriter, op, resultMemRefType,
+                                                 *resultBuffer);
+
+    return success();
+  }
+};
+
 struct CastOpInterface
     : public BufferizableOpInterface::ExternalModel<CastOpInterface,
                                                     tensor::CastOp> {
@@ -1191,6 +1285,7 @@ struct ConcatOpInterface
 void mlir::tensor::registerBufferizableOpInterfaceExternalModels(
     DialectRegistry &registry) {
   registry.addExtension(+[](MLIRContext *ctx, tensor::TensorDialect *dialect) {
+    BitcastOp::attachInterface<BitcastOpInterface>(*ctx);
     CastOp::attachInterface<CastOpInterface>(*ctx);
     CollapseShapeOp::attachInterface<CollapseShapeOpInterface>(*ctx);
     ConcatOp::attachInterface<ConcatOpInterface>(*ctx);
