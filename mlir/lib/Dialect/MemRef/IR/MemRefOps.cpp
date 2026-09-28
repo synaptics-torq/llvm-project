@@ -734,8 +734,16 @@ bool CastOp::areCastCompatible(TypeRange inputs, TypeRange outputs) {
   auto ubT = llvm::dyn_cast<UnrankedMemRefType>(b);
 
   if (aT && bT) {
-    if (aT.getElementType() != bT.getElementType())
-      return false;
+    if (aT.getElementType() != bT.getElementType()) {
+      // A cast may re-interpret the element type when both element types
+      // have the same bit width (e.g. a bf16 buffer viewed as i16): the
+      // bytes in memory are unchanged.
+      if (!aT.getElementType().isIntOrFloat() ||
+          !bT.getElementType().isIntOrFloat() ||
+          aT.getElementType().getIntOrFloatBitWidth() !=
+              bT.getElementType().getIntOrFloatBitWidth())
+        return false;
+    }
     if (aT.getLayout() != bT.getLayout()) {
       int64_t aOffset, bOffset;
       SmallVector<int64_t, 4> aStrides, bStrides;
