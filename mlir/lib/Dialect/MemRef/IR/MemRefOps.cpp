@@ -1933,9 +1933,18 @@ LogicalResult ReinterpretCastOp::verify() {
   if (srcType.getMemorySpace() != resultType.getMemorySpace())
     return emitError("different memory spaces specified for source type ")
            << srcType << " and result memref type " << resultType;
-  if (srcType.getElementType() != resultType.getElementType())
-    return emitError("different element types specified for source type ")
-           << srcType << " and result memref type " << resultType;
+  if (srcType.getElementType() != resultType.getElementType()) {
+    // A reinterpret_cast may re-interpret the element type when both element
+    // types have the same bit width (e.g. a bf16 buffer viewed as i16): the
+    // bytes in memory are unchanged. Shape, layout and memory space must
+    // still match, so the cast stays a free re-interpretation.
+    if (!srcType.getElementType().isIntOrFloat() ||
+        !resultType.getElementType().isIntOrFloat() ||
+        srcType.getElementType().getIntOrFloatBitWidth() !=
+            resultType.getElementType().getIntOrFloatBitWidth())
+      return emitError("different element types specified for source type ")
+             << srcType << " and result memref type " << resultType;
+  }
 
   // Match sizes in result memref type and in static_sizes attribute.
   for (auto [idx, resultSize, expectedSize] :
