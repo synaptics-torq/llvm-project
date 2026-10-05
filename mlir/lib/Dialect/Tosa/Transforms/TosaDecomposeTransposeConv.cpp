@@ -126,7 +126,7 @@ static LogicalResult prepareStridedTransposeConv(tosa::TransposeConv2DOp op,
   const Value inputPadConst =
       createPadConstTensor(builder, op->getLoc(), p.input, p.inputZpVal);
   const Value weightPadConst =
-      createPadConstTensor(builder, op->getLoc(), p.input, p.weightZpVal);
+      createPadConstTensor(builder, op->getLoc(), p.weight, p.weightZpVal);
 
   p.weight = CreateOpAndInferShape<tosa::PadOp>(
       rewriter, p.loc, UnrankedTensorType::get(p.weightETy), p.weight,
