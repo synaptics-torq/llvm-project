@@ -4207,9 +4207,12 @@ static FailureOr<Operation *> vectorizeConvolution(
   if (!inputVecSizes.empty()) {
     // Only use the input vector size corresponding to the channel dim. Other
     // vector dims will be inferred from the Ops.
-    assert((isaConvolutionOpOfType<linalg::DepthwiseConv1DNwcWcOp>(op) ||
-            isaConvolutionOpOfType<linalg::DepthwiseConv1DNcwCwOp>(op)) &&
-           "Not a 1D depthwise conv!");
+    // Generic ops can satisfy isaConvolutionOpInterface without being 1D
+    // depthwise convs (e.g. a conv decomposed into a matmul-like generic);
+    // only the named 1D depthwise ops support the masked/scalable path below.
+    if (!isaConvolutionOpOfType<linalg::DepthwiseConv1DNwcWcOp>(op) &&
+        !isaConvolutionOpOfType<linalg::DepthwiseConv1DNcwCwOp>(op))
+      return failure();
     size_t chDimIdx = 0;
     if (isaConvolutionOpOfType<linalg::DepthwiseConv1DNwcWcOp>(op))
       chDimIdx = 2;
