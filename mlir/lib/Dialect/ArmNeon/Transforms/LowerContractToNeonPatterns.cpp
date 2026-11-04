@@ -180,6 +180,28 @@ protected:
       return rewriter.notifyMatchFailure(op,
                                          "Not applicable to scalable vectors");
 
+    // The lowering takes the sub-tiles of LHS as MxK, RHS as NxK and ACC as
+    // MxN, the layouts the MMLA instructions expect. Reject other indexing
+    // maps, e.g. a KxN RHS, which would otherwise be lowered with transposed
+    // RHS sub-tiles when K == N.
+    MLIRContext *ctx = op.getContext();
+    using MapList = ArrayRef<ArrayRef<AffineExpr>>;
+    auto infer = [&](MapList m) {
+      return AffineMap::inferFromExprList(m, ctx);
+    };
+    AffineExpr m, n, k;
+    SmallVector<AffineMap> expectedMaps;
+    if (itTypes.size() == 3) {
+      bindDims(ctx, m, n, k);
+      expectedMaps = infer({{m, k}, {n, k}, {m, n}});
+    } else {
+      bindDims(ctx, n, k);
+      expectedMaps = infer({{k}, {n, k}, {n}});
+    }
+    if (op.getIndexingMapsArray() != expectedMaps)
+      return rewriter.notifyMatchFailure(
+          op, "indexing maps are not MxK * NxK -> MxN");
+
     // Initialize dimensions and check for a matching K dimension.
     dimM = lhsType.getDimSize(0);
     dimN = rhsType.getDimSize(0);
