@@ -212,6 +212,27 @@ func.func @vector_contract_vecmat_to_bfmmla(%lhs: vector<8xbf16>,
   return %0 : vector<4xf32>
 }
 
+// BFMMLA takes RHS as NxK. A KxN RHS must not be lowered: with K == N, its
+// sub-tiles would be passed transposed.
+// CHECK-LABEL: func.func @vector_contract_vecmat_kxn_rhs_not_lowered
+// CHECK:       vector.contract
+// CHECK-NOT:   arm_neon.intr.bfmmla
+func.func @vector_contract_vecmat_kxn_rhs_not_lowered(%lhs: vector<8xbf16>,
+                                                      %rhs: vector<8x8xbf16>,
+                                                      %acc: vector<8xf32>) -> vector<8xf32> {
+  %0 = vector.contract { indexing_maps = [
+                          affine_map<(n, k) -> (k)>,
+                          affine_map<(n, k) -> (k, n)>,
+                          affine_map<(n, k) -> (n)>
+                        ],
+                        iterator_types = ["parallel", "reduction"],
+                        kind = #vector.kind<add>
+                      }
+    %lhs, %rhs, %acc : vector<8xbf16>, vector<8x8xbf16> into vector<8xf32>
+
+  return %0 : vector<8xf32>
+}
+
 module attributes {transform.with_named_sequence} {
   transform.named_sequence @__transform_main(%module: !transform.any_op {transform.readonly}) {
     %func = transform.structured.match ops{["func.func"]} in %module : (!transform.any_op) -> !transform.op<"func.func">
