@@ -65,6 +65,9 @@ void PatternApplicator::applyCostModel(CostModel model) {
 
   // Copy over the patterns so that we can sort by benefit based on the cost
   // model. Patterns that are already impossible to match are ignored.
+  activePatterns = &sortedPatterns;
+  auto &patterns = sortedPatterns.opSpecific;
+  auto &anyOpPatterns = sortedPatterns.matchAnyOp;
   patterns.clear();
   for (const auto &it : frozenPatternList.getOpSpecificNativePatterns()) {
     for (const RewritePattern *pattern : it.second) {
@@ -116,6 +119,15 @@ void PatternApplicator::applyCostModel(CostModel model) {
   processPatternList(anyOpPatterns);
 }
 
+void PatternApplicator::applyDefaultCostModel() {
+  if (const PDLByteCode *bytecode = frozenPatternList.getPDLByteCode()) {
+    for (const auto &it : llvm::enumerate(bytecode->getPatterns()))
+      mutableByteCodeState->updatePatternBenefit(it.index(),
+                                                 it.value().getBenefit());
+  }
+  activePatterns = &frozenPatternList.getNativePatternsSortedByBenefit();
+}
+
 void PatternApplicator::walkAllPatterns(
     function_ref<void(const Pattern &)> walk) {
   for (const auto &it : frozenPatternList.getOpSpecificNativePatterns())
@@ -143,10 +155,11 @@ LogicalResult PatternApplicator::matchAndRewrite(
     bytecode->match(op, rewriter, pdlMatches, *mutableByteCodeState);
 
   // Check to see if there are patterns matching this specific operation type.
-  MutableArrayRef<const RewritePattern *> opPatterns;
-  auto patternIt = patterns.find(op->getName());
-  if (patternIt != patterns.end())
+  ArrayRef<const RewritePattern *> opPatterns;
+  auto patternIt = activePatterns->opSpecific.find(op->getName());
+  if (patternIt != activePatterns->opSpecific.end())
     opPatterns = patternIt->second;
+  ArrayRef<const RewritePattern *> anyOpPatterns = activePatterns->matchAnyOp;
 
   // Process the patterns for that match the specific operation type, and any
   // operation type in an interleaved fashion.

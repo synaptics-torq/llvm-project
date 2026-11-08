@@ -76,10 +76,9 @@ public:
   void applyCostModel(CostModel model);
 
   /// Apply the default cost model that solely uses the pattern's static
-  /// benefit.
-  void applyDefaultCostModel() {
-    applyCostModel([](const Pattern &pattern) { return pattern.getBenefit(); });
-  }
+  /// benefit. The native patterns sorted this way are shared with the frozen
+  /// pattern list, which sorts them only once.
+  void applyDefaultCostModel();
 
   /// Walk all of the patterns within the applicator.
   void walkAllPatterns(function_ref<void(const Pattern &)> walk);
@@ -87,11 +86,13 @@ public:
 private:
   /// The list that owns the patterns used within this applicator.
   const FrozenRewritePatternSet &frozenPatternList;
-  /// The set of patterns to match for each operation, stable sorted by benefit.
-  DenseMap<OperationName, SmallVector<const RewritePattern *, 2>> patterns;
-  /// The set of patterns that may match against any operation type, stable
-  /// sorted by benefit.
-  SmallVector<const RewritePattern *, 1> anyOpPatterns;
+  /// The native patterns sorted by the last cost model passed to
+  /// applyCostModel.
+  FrozenRewritePatternSet::SortedNativePatterns sortedPatterns;
+  /// The native patterns to match, stable sorted by benefit: `sortedPatterns`,
+  /// or the frozen list's patterns under the default cost model.
+  const FrozenRewritePatternSet::SortedNativePatterns *activePatterns =
+      &sortedPatterns;
   /// The mutable state used during execution of the PDL bytecode.
   std::unique_ptr<detail::PDLByteCodeMutableState> mutableByteCodeState;
 };
