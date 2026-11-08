@@ -171,3 +171,28 @@ FrozenRewritePatternSet::FrozenRewritePatternSet(
 }
 
 FrozenRewritePatternSet::~FrozenRewritePatternSet() = default;
+
+const FrozenRewritePatternSet::SortedNativePatterns &
+FrozenRewritePatternSet::getNativePatternsSortedByBenefit() const {
+  llvm::call_once(impl->sortedByBenefitOnce, [this] {
+    auto sortList = [](auto &list) {
+      llvm::erase_if(list, [](const RewritePattern *pattern) {
+        return pattern->getBenefit().isImpossibleToMatch();
+      });
+      llvm::stable_sort(list, [](const Pattern *lhs, const Pattern *rhs) {
+        return lhs->getBenefit() > rhs->getBenefit();
+      });
+    };
+    SortedNativePatterns &sorted = impl->sortedByBenefit;
+    for (const auto &it : impl->nativeOpSpecificPatternMap) {
+      auto &list = sorted.opSpecific[it.first];
+      list.append(it.second.begin(), it.second.end());
+      sortList(list);
+    }
+    for (const std::unique_ptr<RewritePattern> &pattern :
+         impl->nativeAnyOpPatterns)
+      sorted.matchAnyOp.push_back(pattern.get());
+    sortList(sorted.matchAnyOp);
+  });
+  return impl->sortedByBenefit;
+}

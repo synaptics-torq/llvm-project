@@ -10,6 +10,7 @@
 #define MLIR_REWRITE_FROZENREWRITEPATTERNSET_H
 
 #include "mlir/IR/PatternMatch.h"
+#include "llvm/Support/Threading.h"
 
 namespace mlir {
 namespace detail {
@@ -28,6 +29,13 @@ public:
   /// A map of operation specific native patterns.
   using OpSpecificNativePatternListT =
       DenseMap<OperationName, std::vector<RewritePattern *>>;
+
+  /// The native patterns sorted by benefit, highest first, without the
+  /// patterns that are impossible to match.
+  struct SortedNativePatterns {
+    DenseMap<OperationName, SmallVector<const RewritePattern *, 2>> opSpecific;
+    SmallVector<const RewritePattern *, 1> matchAnyOp;
+  };
 
   FrozenRewritePatternSet();
   FrozenRewritePatternSet(FrozenRewritePatternSet &&patterns) = default;
@@ -69,6 +77,11 @@ public:
     return impl->pdlByteCode.get();
   }
 
+  /// Return the native patterns sorted by their static benefit, as the default
+  /// cost model of PatternApplicator orders them. They are sorted on the first
+  /// call and shared by all copies of this list.
+  const SortedNativePatterns &getNativePatternsSortedByBenefit() const;
+
 private:
   /// The internal implementation of the frozen pattern list.
   struct Impl {
@@ -86,6 +99,10 @@ private:
 
     /// The bytecode containing the compiled PDL patterns.
     std::unique_ptr<detail::PDLByteCode> pdlByteCode;
+
+    /// The native patterns sorted by static benefit, built on first use.
+    llvm::once_flag sortedByBenefitOnce;
+    SortedNativePatterns sortedByBenefit;
   };
 
   /// A pointer to the internal pattern list. This uses a shared_ptr to avoid
