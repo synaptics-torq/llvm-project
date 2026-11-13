@@ -211,3 +211,32 @@ func.func @transpose_conv2d_strided_dynamic_batch(%arg0: tensor<?x17x15x3xf32>, 
   %0 = tosa.transpose_conv2d %arg0, %arg1, %arg2, %zp, %zp out_pad([0, 0, 0, 0]) stride([2, 3]) acc_type(f32) : (tensor<?x17x15x3xf32>, tensor<5x3x5x3xf32>, tensor<5xf32>, tensor<1xf32>, tensor<1xf32>) -> tensor<?x35x47x5xf32>
   return %0 : tensor<?x35x47x5xf32>
 }
+
+// -----
+
+// A positive out_pad with a rescale, where the conv is one row short: the conv
+// computes that row from extra input padding, so it gets the rescaled bias. The
+// result is only sliced, not padded.
+// CHECK-LABEL: @transpose_conv2d_strided_rescale_out_pad
+func.func @transpose_conv2d_strided_rescale_out_pad(%arg0: tensor<1x4x6x4xi8>, %arg1: tensor<8x4x3x4xi8>) -> tensor<1x11x13x8xi8> {
+  // CHECK-DAG: %[[INPUT_ZP:.+]] = tosa.const values(dense<-3> : tensor<1xi8>) : () -> tensor<1xi8>
+  // CHECK-DAG: %[[EXTRA_PAD:.+]] = tosa.const_shape values(dense<[0, 0, 0, 1, 0, 0, 0, 0]> : tensor<8xindex>)
+  // CHECK: %[[PAD:.+]] = tosa.pad %arg0, %{{.+}}, %[[INPUT_ZP]] : (tensor<1x4x6x4xi8>, !tosa.shape<8>, tensor<1xi8>) -> tensor<1x6x8x4xi8>
+  // CHECK: %[[EXTRA:.+]] = tosa.pad %[[PAD]], %[[EXTRA_PAD]], %[[INPUT_ZP]] : (tensor<1x6x8x4xi8>, !tosa.shape<8>, tensor<1xi8>) -> tensor<1x7x8x4xi8>
+  // CHECK: %[[CONV:.+]] = tosa.conv2d %[[EXTRA]]
+  // CHECK-SAME: -> tensor<1x6x7x32xi32>
+  // CHECK: tosa.rescale %[[CONV]]
+  // CHECK: %[[SLICE:.+]] = tosa.slice %{{.+}} : (tensor<1x12x14x8xi8>, !tosa.shape<4>, !tosa.shape<4>) -> tensor<1x11x13x8xi8>
+  // CHECK-NOT: tosa.pad
+  // CHECK: return %[[SLICE]]
+  %bias = "tosa.const"() <{values = dense<[100, -200, 300, -400, 500, -600, 700, -800]> : tensor<8xi32>}> : () -> tensor<8xi32>
+  %input_zp = "tosa.const"() <{values = dense<-3> : tensor<1xi8>}> : () -> tensor<1xi8>
+  %weight_zp = "tosa.const"() <{values = dense<0> : tensor<1xi8>}> : () -> tensor<1xi8>
+  %0 = tosa.transpose_conv2d %arg0, %arg1, %bias, %input_zp, %weight_zp out_pad([0, 1, 0, 0]) stride([2, 2]) acc_type(i32) : (tensor<1x4x6x4xi8>, tensor<8x4x3x4xi8>, tensor<8xi32>, tensor<1xi8>, tensor<1xi8>) -> tensor<1x11x13x8xi32>
+  %multiplier = "tosa.const"() <{values = dense<1073741824> : tensor<1xi32>}> : () -> tensor<1xi32>
+  %shift = "tosa.const"() <{values = dense<38> : tensor<1xi8>}> : () -> tensor<1xi8>
+  %rescale_input_zp = "tosa.const"() <{values = dense<0> : tensor<1xi32>}> : () -> tensor<1xi32>
+  %rescale_output_zp = "tosa.const"() <{values = dense<5> : tensor<1xi8>}> : () -> tensor<1xi8>
+  %1 = tosa.rescale %0, %multiplier, %shift, %rescale_input_zp, %rescale_output_zp scale32(true) rounding_mode<SINGLE_ROUND> per_channel(false) input_unsigned(false) output_unsigned(false) : (tensor<1x11x13x8xi32>, tensor<1xi32>, tensor<1xi8>, tensor<1xi32>, tensor<1xi8>) -> tensor<1x11x13x8xi8>
+  return %1 : tensor<1x11x13x8xi8>
+}

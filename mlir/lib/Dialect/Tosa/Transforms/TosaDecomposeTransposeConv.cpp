@@ -280,6 +280,43 @@ static Value shuffleSliceAndPadResult(PatternRewriter &rewriter, Location loc,
       resultPaddingVal);
 }
 
+// Pad the input of the strided conv of `p` with extra rows and columns, so that
+// the conv also computes the rows and columns a positive out_pad adds. Return
+// the out_pad to use for the result: not positive on the top and left, so the
+// result is only sliced. The extra rows and columns read only the input zero
+// point, so the conv gives the bias there. A pad of the result would set them
+// to 0, which is wrong once the result is rescaled.
+static SmallVector<int64_t, 4> padInputForOutPad(PatternRewriter &rewriter,
+                                                 StridedTransposeConvPrep &p) {
+  auto inputTy = cast<ShapedType>(p.input.getType());
+  auto weightTy = cast<ShapedType>(p.weight.getType());
+  SmallVector<int64_t, 4> outPad(p.pad);
+  llvm::SmallVector<int64_t, 8> extra = {0, 0, 0, 0, 0, 0, 0, 0};
+  for (int64_t axis = 0; axis < 2; ++axis) {
+    int64_t stride = p.stride[axis];
+    int64_t convSize =
+        inputTy.getDimSize(axis + 1) - weightTy.getDimSize(axis + 1) + 1;
+    int64_t low =
+        llvm::divideCeil(std::max<int64_t>(0, p.pad[2 * axis]), stride);
+    int64_t sliceLow = low * stride - p.pad[2 * axis];
+    int64_t missing =
+        p.resultTy.getDimSize(axis + 1) + sliceLow - (convSize + low) * stride;
+    int64_t high = llvm::divideCeil(std::max<int64_t>(0, missing), stride);
+    extra[2 * axis + 2] = low;
+    extra[2 * axis + 3] = high;
+    outPad[2 * axis] -= low * stride;
+  }
+  if (llvm::all_of(extra, [](int64_t v) { return v == 0; }))
+    return outPad;
+
+  ImplicitLocOpBuilder builder(p.loc, rewriter);
+  Value padConst = createPadConstTensor(builder, p.loc, p.input, p.inputZpVal);
+  p.input = CreateOpAndInferShape<tosa::PadOp>(
+      rewriter, p.loc, UnrankedTensorType::get(p.inputETy), p.input,
+      getTosaConstShape(rewriter, p.loc, extra), padConst);
+  return outPad;
+}
+
 class TransposeConvRescaleDecompose : public OpRewritePattern<tosa::RescaleOp> {
 public:
   explicit TransposeConvRescaleDecompose(MLIRContext *ctx)
@@ -342,6 +379,7 @@ public:
             DenseElementsAttr::get(tiledBiasTy, ArrayRef<Attribute>(tiledBias)))
             .getResult();
 
+    SmallVector<int64_t, 4> outPad = padInputForOutPad(rewriter, p);
     FailureOr<Value> maybeConv = buildConv2DFromPreparedInput(
         op, rewriter, p, tiledBiasConst,
         cast<ShapedType>(op->getResult(0).getType()).getElementType());
@@ -415,7 +453,7 @@ public:
     ShapedType rescaleTy = cast<ShapedType>(rescaleOp.getResult().getType());
     Value resultPad = shuffleSliceAndPadResult(
         rewriter, p.loc, rescaled, rescaleOutETy, rescaleTy, p.batch,
-        p.outputChannels, p.stride, p.pad);
+        p.outputChannels, p.stride, outPad);
 
     rewriter.replaceOp(rescaleOp, resultPad);
     if (op->use_empty())
